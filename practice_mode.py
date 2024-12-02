@@ -29,15 +29,26 @@ class PracticePortfolio:
     def execute_trade(self, symbol: str, quantity: int, price: float, side: str) -> Tuple[bool, str]:
         """Execute a practice trade and update portfolio"""
         try:
+            # Normalize symbol case
+            symbol = symbol.strip().upper()
+            
             # Input validation
             if not symbol or not isinstance(symbol, str):
-                return False, "Invalid symbol"
+                return False, "Invalid symbol format. Please enter a valid stock symbol."
             if not quantity or quantity <= 0:
-                return False, "Invalid quantity"
+                return False, "Invalid quantity. Please enter a positive number of shares."
             if not price or price <= 0:
-                return False, "Invalid price"
+                return False, "Invalid price. Please enter a valid positive price."
             if not side or side.lower() not in ['buy', 'sell']:
-                return False, "Invalid trade side"
+                return False, "Invalid trade side. Please select either 'buy' or 'sell'."
+                
+            # Position validation for sell orders
+            if side.lower() == 'sell':
+                if symbol not in self.positions:
+                    return False, f"Position not found. You don't have any shares of {symbol} in your portfolio."
+                available_shares = self.positions[symbol].quantity
+                if quantity > available_shares:
+                    return False, f"Insufficient shares for sale. You only have {available_shares} shares of {symbol}."
 
             trade_value = quantity * price
             pnl = None

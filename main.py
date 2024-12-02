@@ -99,17 +99,35 @@ if stock_data:
             st.metric("52 Week High", 
                      f"${stock_info.get('fiftyTwoWeekHigh', 0):.2f}")
 
-    # Comparison Charts
-    st.subheader('Price Comparison')
+    # Stock Comparison Analysis
+    st.header('Stock Comparison Analysis')
     
-    # Line chart for price comparison
+    # Calculate comparison metrics
+    comparison_data = calculate_comparison_metrics(stock_data)
+    
+    # Correlation Heatmap
+    st.subheader('Price Correlation Matrix')
+    fig_correlation = go.Figure(data=go.Heatmap(
+        z=comparison_data['correlation'],
+        x=symbols,
+        y=symbols,
+        colorscale='RdBu',
+        zmin=-1,
+        zmax=1
+    ))
+    fig_correlation.update_layout(
+        title='Stock Price Correlation',
+        template='plotly_white'
+    )
+    st.plotly_chart(fig_correlation, use_container_width=True)
+    
+    # Normalized Price Comparison
+    st.subheader('Relative Performance')
     fig_comparison = go.Figure()
     for symbol in symbols:
-        hist_data = stock_data[symbol]['history']
-        normalized_price = (hist_data['Close'] / hist_data['Close'].iloc[0]) * 100
         fig_comparison.add_trace(go.Scatter(
-            x=hist_data.index,
-            y=normalized_price,
+            x=comparison_data['normalized_prices'].index,
+            y=comparison_data['normalized_prices'][symbol] * 100,
             name=symbol,
             mode='lines'
         ))
@@ -121,6 +139,33 @@ if stock_data:
         template='plotly_white'
     )
     st.plotly_chart(fig_comparison, use_container_width=True)
+    
+    # Volume Comparison
+    st.subheader('Volume Analysis')
+    fig_volume = go.Figure()
+    for symbol in symbols:
+        fig_volume.add_trace(go.Scatter(
+            x=comparison_data['volume_ratio'].index,
+            y=comparison_data['volume_ratio'][symbol],
+            name=symbol,
+            mode='lines'
+        ))
+    
+    fig_volume.update_layout(
+        title='Volume Ratio (Current/20-day Average)',
+        yaxis_title='Volume Ratio',
+        xaxis_title='Date',
+        template='plotly_white'
+    )
+    st.plotly_chart(fig_volume, use_container_width=True)
+    
+    # Beta Analysis
+    if len(symbols) > 1:
+        st.subheader('Beta Analysis')
+        market_symbol = symbols[0]
+        st.write(f"Beta values relative to {market_symbol}:")
+        for symbol, beta in comparison_data['betas'].items():
+            st.metric(f"{symbol} Beta", f"{beta:.2f}")
     
     # Individual stock charts
     for symbol in symbols:

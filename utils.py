@@ -10,10 +10,17 @@ def calculate_metrics(hist_data):
     metrics['Close'] = hist_data['Close']
     metrics['Daily Return'] = hist_data['Close'].pct_change()
     metrics['Rolling Volatility'] = metrics['Daily Return'].rolling(window=20).std() * np.sqrt(252)
+    metrics['YTD Return'] = (hist_data['Close'] / hist_data['Close'].iloc[0] - 1) * 100
+    
+    # Volume analysis
+    metrics['Volume'] = hist_data['Volume']
+    metrics['Avg Volume (20d)'] = hist_data['Volume'].rolling(window=20).mean()
+    metrics['Volume Ratio'] = hist_data['Volume'] / metrics['Avg Volume (20d)']
     
     # Moving averages
     metrics['SMA_20'] = hist_data['Close'].rolling(window=20).mean()
     metrics['SMA_50'] = hist_data['Close'].rolling(window=50).mean()
+    metrics['Price vs SMA_20'] = (hist_data['Close'] / metrics['SMA_20'] - 1) * 100
     
     # Technical indicators
     # RSI
@@ -29,11 +36,55 @@ def calculate_metrics(hist_data):
     metrics['MACD'] = exp1 - exp2
     metrics['Signal Line'] = metrics['MACD'].ewm(span=9, adjust=False).mean()
     
+    # Performance metrics
+    metrics['Max Drawdown'] = (hist_data['Close'] / hist_data['Close'].expanding(min_periods=1).max() - 1) * 100
+    
     # Format and clean
     metrics = metrics.round(2)
     metrics.index = metrics.index.strftime('%Y-%m-%d')
     
     return metrics
+
+def calculate_comparison_metrics(stock_data):
+    """Calculate comparison metrics between multiple stocks."""
+    comparison = {}
+    
+    # Get all closing prices in a single dataframe
+    closes = pd.DataFrame()
+    volumes = pd.DataFrame()
+    returns = pd.DataFrame()
+    
+    for symbol, data in stock_data.items():
+        hist = data['history']
+        closes[symbol] = hist['Close']
+        volumes[symbol] = hist['Volume']
+        returns[symbol] = hist['Close'].pct_change()
+    
+    # Calculate correlation matrix
+    correlation_matrix = returns.corr()
+    
+    # Calculate relative performance
+    first_day_prices = closes.iloc[0]
+    normalized_prices = closes / first_day_prices
+    
+    # Calculate beta (using first stock as market proxy)
+    market_symbol = list(stock_data.keys())[0]
+    market_returns = returns[market_symbol]
+    betas = {}
+    
+    for symbol in stock_data.keys():
+        if symbol != market_symbol:
+            stock_returns = returns[symbol]
+            beta = (stock_returns.cov(market_returns) / market_returns.var())
+            betas[symbol] = round(beta, 2)
+    
+    # Compile metrics
+    comparison['correlation'] = correlation_matrix
+    comparison['normalized_prices'] = normalized_prices
+    comparison['betas'] = betas
+    comparison['volume_ratio'] = volumes / volumes.rolling(window=20).mean()
+    
+    return comparison
 
 def get_recommendation(hist_data):
     """Generate trading recommendation based on technical analysis."""
