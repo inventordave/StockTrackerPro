@@ -51,9 +51,17 @@ if stock_info and hist_data is not None:
     
     with col1:
         current_price = hist_data['Close'].iloc[-1]
+        # Calculate price change only if we have at least 2 data points
+        if len(hist_data) >= 2:
+            prev_price = hist_data['Close'].iloc[-2]
+            price_change = ((current_price - prev_price)/prev_price*100)
+            change_str = f"{price_change:.2f}%"
+        else:
+            change_str = "N/A"
+        
         st.metric("Current Price", 
                  f"${current_price:.2f}", 
-                 f"{((current_price - hist_data['Close'].iloc[-2])/hist_data['Close'].iloc[-2]*100):.2f}%")
+                 change_str)
     
     with col2:
         st.metric("Market Cap", 
