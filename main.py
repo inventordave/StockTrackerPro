@@ -179,6 +179,13 @@ if stock_data:
         # Trading Interface
         st.subheader("Trading Interface")
         
+        # Trading platform selection (moved outside practice mode condition)
+        platform = st.selectbox(
+            "Select Trading Platform",
+            ["Alpaca", "Interactive Brokers"],
+            key="trading_platform"
+        )
+        
         # Practice Mode Toggle
         practice_mode = st.toggle("Practice Mode", help="Enable practice trading with virtual money")
         
@@ -238,14 +245,6 @@ if stock_data:
                 if metrics['worst_trade']:
                     st.write(f"Worst Trade: {metrics['worst_trade'].symbol} - ${metrics['worst_trade'].pnl:,.2f}")
         
-        if not practice_mode:
-            # Trading platform selection
-            platform = st.selectbox(
-                "Select Trading Platform",
-                ["Alpaca", "Interactive Brokers"],
-                key="trading_platform"
-            )
-        
         # API Credentials
         with st.expander("Trading Platform Credentials"):
             api_key = st.text_input("API Key", type="password", key="api_key")
@@ -281,28 +280,33 @@ if stock_data:
             if order_type == "Limit":
                 limit_price = st.number_input("Limit Price", min_value=0.01, value=float(current_price))
         
-        # Trade execution button
-        if st.button("Execute Trade"):
-            if practice_mode:
-                # Execute practice trade
-                price = current_price if order_type == "Market" else limit_price
-                success = st.session_state.practice_portfolio.execute_trade(
-                    symbol=symbol,
-                    quantity=quantity,
-                    price=price,
-                    side=recommendation.lower()
-                )
-                if success:
-                    st.success(f"Practice trade executed: {recommendation} {quantity} shares of {symbol} at ${price:.2f}")
+        # Trade execution section
+        execute_trade = st.button("Execute Trade")
+        if execute_trade:
+            try:
+                if practice_mode:
+                    # Execute practice trade
+                    price = current_price if order_type == "Market" else limit_price
+                    if price <= 0:
+                        st.error("Invalid price. Please check the order parameters.")
+                    elif quantity <= 0:
+                        st.error("Invalid quantity. Please enter a positive number.")
+                    else:
+                        success = st.session_state.practice_portfolio.execute_trade(
+                            symbol=symbol,
+                            quantity=quantity,
+                            price=price,
+                            side=recommendation.lower()
+                        )
+                        if success:
+                            st.success(f"Practice trade executed: {recommendation} {quantity} shares of {symbol} at ${price:.2f}")
+                        else:
+                            st.error("Trade failed. Please check your virtual balance and trade parameters.")
                 else:
-                    st.error("Insufficient funds or invalid trade parameters")
-            else:
-                # Real trading execution
-                if not api_key or not api_secret:
-                    st.error("Please enter API credentials first.")
-                else:
-                    confirm = st.button(f"Confirm {recommendation} {quantity} shares of {symbol}")
-                    if confirm:
+                    # Real trading execution
+                    if not api_key or not api_secret:
+                        st.error("Please enter API credentials first.")
+                    else:
                         credentials = {
                             "api_key": api_key,
                             "api_secret": api_secret,
@@ -321,6 +325,8 @@ if stock_data:
                             st.success(message)
                         else:
                             st.error(message)
+            except Exception as e:
+                st.error(f"An error occurred: {str(e)}")
 
     # Additional Information
     with st.expander("Company Information"):
