@@ -1,39 +1,84 @@
+import os
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
+import logging
 from utils import calculate_metrics, get_recommendation, calculate_comparison_metrics
 from trading import trading_service
 from practice_mode import PracticePortfolio
 
-# Initialize practice portfolio in session state if not exists
-if 'practice_portfolio' not in st.session_state:
-    st.session_state.practice_portfolio = PracticePortfolio()
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Page config
+# Set page config before any other Streamlit commands
 st.set_page_config(
     page_title="Stock Analysis Dashboard",
     page_icon="📈",
     layout="wide"
 )
 
-# Load custom CSS
-with open('assets/style.css') as f:
-    st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+# Initialize practice portfolio in session state if not exists
+if 'practice_portfolio' not in st.session_state:
+    st.session_state.practice_portfolio = PracticePortfolio()
 
-# Title
+# Load custom CSS with error handling
+try:
+    css_path = 'assets/style.css'
+    if not os.path.exists(css_path):
+        logger.error(f"CSS file not found: {css_path}")
+        st.error("Error loading style sheet. Using default styling.")
+    else:
+        with open(css_path) as f:
+            st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+except Exception as e:
+    logger.error(f"Error loading CSS: {str(e)}")
+    st.warning("Error loading custom styles. Using default styling.")
+
+# Title and Description
 st.title('📈 Stock Analysis Dashboard')
+st.markdown("""
+This dashboard allows you to compare multiple stocks and analyze their performance metrics.
+Enter up to 5 stock symbols separated by commas (e.g., AAPL,MSFT,GOOGL).
+""")
 
-# Input section
+# Input section with improved layout
 col1, col2 = st.columns([2, 1])
 with col1:
-    symbols_input = st.text_input('Enter Stock Symbols (comma-separated, e.g., AAPL,MSFT):', value='AAPL')
-    symbols = [sym.strip().upper() for sym in symbols_input.split(',') if sym.strip()]
+    symbols_input = st.text_input(
+        'Enter Stock Symbols:',
+        value='AAPL',
+        help='Enter up to 5 comma-separated stock symbols (e.g., AAPL,MSFT,GOOGL)'
+    )
+    # Improved symbol parsing with validation
+    try:
+        symbols = [sym.strip().upper() for sym in symbols_input.split(',') if sym.strip()]
+        if not symbols:
+            st.error('Please enter at least one valid stock symbol.')
+            st.stop()
+        elif len(symbols) > 5:
+            st.warning('Maximum 5 stocks can be compared at once. Only first 5 will be shown.')
+            symbols = symbols[:5]
+        
+        # Validate symbols format
+        invalid_symbols = [sym for sym in symbols if not sym.isalpha() or len(sym) > 5]
+        if invalid_symbols:
+            st.error(f'Invalid symbol format: {", ".join(invalid_symbols)}. Please use valid stock symbols.')
+            st.stop()
+    except Exception as e:
+        st.error(f'Error processing symbols: {str(e)}')
+        st.stop()
+        
 with col2:
-    period = st.selectbox('Select Time Period:', 
-                         ['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y'])
+    period = st.selectbox(
+        'Select Time Period:', 
+        ['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y'],
+        help='Choose the time period for historical data analysis',
+        key='time_period'
+    )
 
 # Validate input
 if not symbols:
@@ -47,15 +92,72 @@ if len(symbols) > 5:
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_stock_data(symbols, period):
     data = {}
+    errors = []
+    
+    if not symbols:
+        st.error("No symbols provided")
+        return None
+        
     for symbol in symbols:
         try:
-            stock = yf.Ticker(symbol)
-            hist = stock.history(period=period, interval="1d")
-            info = stock.info
-            data[symbol] = {'history': hist, 'info': info}
+            with st.spinner(f'Fetching data for {symbol}...'):
+                stock = yf.Ticker(symbol)
+                
+                # Fetch history with timeout and error handling
+                try:
+                    hist = stock.history(period=period, interval="1d")
+                    if hist.empty:
+                        errors.append(f"No historical data available for {symbol}")
+                        continue
+                    
+                    if len(hist) < 20:  # Check for sufficient data points
+                        errors.append(f"Insufficient historical data for {symbol} (minimum 20 days required)")
+                        continue
+                        
+                    # Ensure all required columns are present
+                    required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+                    missing_columns = [col for col in required_columns if col not in hist.columns]
+                    if missing_columns:
+                        errors.append(f"Missing required data columns for {symbol}: {', '.join(missing_columns)}")
+                        continue
+                        
+                except Exception as e:
+                    errors.append(f"Error fetching historical data for {symbol}: {str(e)}")
+                    continue
+                    
+                # Fetch info with timeout and error handling
+                try:
+                    info = stock.info
+                    if not info:
+                        errors.append(f"No information available for {symbol}")
+                        continue
+                        
+                    # Validate required info fields
+                    required_info = ['longName', 'sector', 'industry']
+                    for field in required_info:
+                        if field not in info:
+                            info[field] = 'N/A'
+                            
+                except Exception as e:
+                    errors.append(f"Error fetching information for {symbol}: {str(e)}")
+                    continue
+                    
+                # Process and clean the data
+                hist = hist.fillna(method='ffill').fillna(method='bfill')  # Handle any NaN values
+                data[symbol] = {'history': hist, 'info': info}
+                
         except Exception as e:
-            st.error(f'Error fetching data for {symbol}: {str(e)}')
+            errors.append(f"Error processing {symbol}: {str(e)}")
+    
+    # Handle errors
+    if errors:
+        error_message = "\n".join(errors)
+        if not data:  # If no valid data at all
+            st.error(f"Failed to fetch any valid data:\n{error_message}")
             return None
+        else:  # If some symbols were successful
+            st.warning(f"Some symbols had errors:\n{error_message}")
+    
     return data if data else None
 
 stock_data = get_stock_data(symbols, period)
@@ -102,62 +204,92 @@ if stock_data:
     # Stock Comparison Analysis
     st.header('Stock Comparison Analysis')
     
-    # Calculate comparison metrics
-    comparison_data = calculate_comparison_metrics(stock_data)
+    try:
+        # Calculate comparison metrics with error handling
+        comparison_data = calculate_comparison_metrics(stock_data)
+        
+        if comparison_data['correlation'].empty:
+            st.error("Unable to calculate comparison metrics. Please check the input data.")
+            st.stop()
+        
+        # Correlation Heatmap
+        st.subheader('Price Correlation Matrix')
+        if not comparison_data['correlation'].empty:
+            fig_correlation = go.Figure(data=go.Heatmap(
+                z=comparison_data['correlation'],
+                x=symbols,
+                y=symbols,
+                colorscale='RdBu',
+                zmin=-1,
+                zmax=1
+            ))
+            fig_correlation.update_layout(
+                title='Stock Price Correlation',
+                template='plotly_white'
+            )
+            st.plotly_chart(fig_correlation, use_container_width=True)
+        else:
+            st.warning("Unable to generate correlation heatmap due to insufficient data.")
     
-    # Correlation Heatmap
-    st.subheader('Price Correlation Matrix')
-    fig_correlation = go.Figure(data=go.Heatmap(
-        z=comparison_data['correlation'],
-        x=symbols,
-        y=symbols,
-        colorscale='RdBu',
-        zmin=-1,
-        zmax=1
-    ))
-    fig_correlation.update_layout(
-        title='Stock Price Correlation',
-        template='plotly_white'
-    )
-    st.plotly_chart(fig_correlation, use_container_width=True)
-    
-    # Normalized Price Comparison
-    st.subheader('Relative Performance')
-    fig_comparison = go.Figure()
-    for symbol in symbols:
-        fig_comparison.add_trace(go.Scatter(
-            x=comparison_data['normalized_prices'].index,
-            y=comparison_data['normalized_prices'][symbol] * 100,
-            name=symbol,
-            mode='lines'
-        ))
-    
-    fig_comparison.update_layout(
-        title='Normalized Price Comparison (Base 100)',
-        yaxis_title='Normalized Price',
-        xaxis_title='Date',
-        template='plotly_white'
-    )
-    st.plotly_chart(fig_comparison, use_container_width=True)
-    
-    # Volume Comparison
-    st.subheader('Volume Analysis')
-    fig_volume = go.Figure()
-    for symbol in symbols:
-        fig_volume.add_trace(go.Scatter(
-            x=comparison_data['volume_ratio'].index,
-            y=comparison_data['volume_ratio'][symbol],
-            name=symbol,
-            mode='lines'
-        ))
-    
-    fig_volume.update_layout(
-        title='Volume Ratio (Current/20-day Average)',
-        yaxis_title='Volume Ratio',
-        xaxis_title='Date',
-        template='plotly_white'
-    )
-    st.plotly_chart(fig_volume, use_container_width=True)
+    try:
+        # Normalized Price Comparison
+        st.subheader('Relative Performance')
+        if not comparison_data['normalized_prices'].empty:
+            fig_comparison = go.Figure()
+            for symbol in symbols:
+                if symbol in comparison_data['normalized_prices'].columns:
+                    normalized_data = comparison_data['normalized_prices'][symbol]
+                    if not normalized_data.isna().all():
+                        fig_comparison.add_trace(go.Scatter(
+                            x=comparison_data['normalized_prices'].index,
+                            y=normalized_data * 100,
+                            name=symbol,
+                            mode='lines'
+                        ))
+            
+            if len(fig_comparison.data) > 0:
+                fig_comparison.update_layout(
+                    title='Normalized Price Comparison (Base 100)',
+                    yaxis_title='Normalized Price',
+                    xaxis_title='Date',
+                    template='plotly_white'
+                )
+                st.plotly_chart(fig_comparison, use_container_width=True)
+            else:
+                st.warning("Unable to generate relative performance chart due to invalid data.")
+        else:
+            st.warning("No valid data available for relative performance comparison.")
+        
+        # Volume Comparison
+        st.subheader('Volume Analysis')
+        if not comparison_data['volume_ratio'].empty:
+            fig_volume = go.Figure()
+            for symbol in symbols:
+                if symbol in comparison_data['volume_ratio'].columns:
+                    volume_data = comparison_data['volume_ratio'][symbol]
+                    if not volume_data.isna().all():
+                        fig_volume.add_trace(go.Scatter(
+                            x=comparison_data['volume_ratio'].index,
+                            y=volume_data,
+                            name=symbol,
+                            mode='lines'
+                        ))
+            
+            if len(fig_volume.data) > 0:
+                fig_volume.update_layout(
+                    title='Volume Ratio (Current/20-day Average)',
+                    yaxis_title='Volume Ratio',
+                    xaxis_title='Date',
+                    template='plotly_white'
+                )
+                st.plotly_chart(fig_volume, use_container_width=True)
+            else:
+                st.warning("Unable to generate volume analysis chart due to invalid data.")
+        else:
+            st.warning("No valid data available for volume analysis.")
+            
+    except Exception as e:
+        st.error(f"Error generating comparison charts: {str(e)}")
     
     # Beta Analysis
     if len(symbols) > 1:
@@ -237,12 +369,33 @@ if stock_data:
         if practice_mode:
             st.info("🎓 Practice Mode Enabled - Trading with virtual portfolio")
             
-            # Show practice portfolio metrics
-            portfolio = st.session_state.practice_portfolio
-            current_prices = {symbol: stock_data[symbol]['history']['Close'].iloc[-1] 
-                            for symbol in stock_data.keys()}
-            
-            metrics = portfolio.get_performance_metrics(current_prices)
+            # Show practice portfolio metrics with error handling
+            try:
+                portfolio = st.session_state.practice_portfolio
+                current_prices = {}
+                try:
+                    for symbol in stock_data.keys():
+                        if 'history' in stock_data[symbol] and not stock_data[symbol]['history'].empty:
+                            current_prices[symbol] = stock_data[symbol]['history']['Close'].iloc[-1]
+                        else:
+                            logger.warning(f"Missing or empty historical data for {symbol}")
+                except Exception as e:
+                    logger.error(f"Error getting current prices: {str(e)}")
+                    st.warning("Some price data could not be loaded. Portfolio metrics may be incomplete.")
+                
+                metrics = portfolio.get_performance_metrics(current_prices)
+            except Exception as e:
+                logger.error(f"Error calculating portfolio metrics: {str(e)}")
+                st.error("Unable to calculate portfolio metrics. Please try again later.")
+                metrics = {
+                    'total_value': 0,
+                    'cash_balance': 0,
+                    'total_return': 0,
+                    'win_ratio': 0,
+                    'total_trades': 0,
+                    'best_trade': None,
+                    'worst_trade': None
+                }
             
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -254,35 +407,50 @@ if stock_data:
             with col4:
                 st.metric("Win Ratio", f"{metrics['win_ratio']*100:.1f}%")
             
-            # Portfolio Performance Chart
+            # Portfolio Performance Chart with error handling
             if metrics['total_trades'] > 0:
-                st.subheader("Portfolio Performance")
-                trade_df = pd.DataFrame([
-                    {
-                        'Date': trade.date,
-                        'Symbol': trade.symbol,
-                        'Side': trade.side,
-                        'Quantity': trade.quantity,
-                        'Price': trade.price,
-                        'PnL': trade.pnl if trade.pnl is not None else 0
-                    }
-                    for trade in portfolio.trade_history
-                ])
-                
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=trade_df['Date'],
-                    y=trade_df['PnL'].cumsum(),
-                    mode='lines',
-                    name='Cumulative P&L'
-                ))
-                fig.update_layout(
-                    title='Portfolio P&L Over Time',
-                    xaxis_title='Date',
-                    yaxis_title='Cumulative P&L ($)',
-                    template='plotly_white'
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                try:
+                    st.subheader("Portfolio Performance")
+                    # Create trade history dataframe with error handling
+                    try:
+                        trade_df = pd.DataFrame([
+                            {
+                                'Date': trade.date,
+                                'Symbol': trade.symbol,
+                                'Side': trade.side,
+                                'Quantity': trade.quantity,
+                                'Price': trade.price,
+                                'PnL': trade.pnl if trade.pnl is not None else 0
+                            }
+                            for trade in portfolio.trade_history
+                        ])
+                    except Exception as e:
+                        logger.error(f"Error creating trade history dataframe: {str(e)}")
+                        st.error("Unable to process trade history data.")
+                        trade_df = pd.DataFrame()
+
+                    if not trade_df.empty:
+                        try:
+                            fig = go.Figure()
+                            fig.add_trace(go.Scatter(
+                                x=trade_df['Date'],
+                                y=trade_df['PnL'].cumsum(),
+                                mode='lines',
+                                name='Cumulative P&L'
+                            ))
+                            fig.update_layout(
+                                title='Portfolio P&L Over Time',
+                                xaxis_title='Date',
+                                yaxis_title='Cumulative P&L ($)',
+                                template='plotly_white'
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                        except Exception as e:
+                            logger.error(f"Error generating performance chart: {str(e)}")
+                            st.error("Unable to generate performance chart.")
+                except Exception as e:
+                    logger.error(f"Error in portfolio performance visualization: {str(e)}")
+                    st.error("Unable to display portfolio performance.")
                 
                 # Show best and worst trades
                 if metrics['best_trade']:
@@ -330,48 +498,57 @@ if stock_data:
         if execute_trade:
             try:
                 if practice_mode:
-                    # Execute practice trade
-                    price = current_price if order_type == "Market" else limit_price
-                    if price <= 0:
-                        st.error("Invalid price. Please check the order parameters.")
-                    elif quantity <= 0:
-                        st.error("Invalid quantity. Please enter a positive number.")
-                    else:
-                        success, message = st.session_state.practice_portfolio.execute_trade(
-                            symbol=symbol,
-                            quantity=quantity,
-                            price=price,
-                            side=recommendation.lower()
-                        )
-                        if success:
-                            st.success(f"Practice trade executed: {recommendation} {quantity} shares of {symbol} at ${price:.2f}")
+                    try:
+                        # Execute practice trade
+                        price = current_price if order_type == "Market" else limit_price
+                        if price <= 0:
+                            st.error("Invalid price. Please check the order parameters.")
+                        elif quantity <= 0:
+                            st.error("Invalid quantity. Please enter a positive number.")
                         else:
-                            st.error(f"Trade failed: {message}")
+                            success, message = st.session_state.practice_portfolio.execute_trade(
+                                symbol=symbol,
+                                quantity=quantity,
+                                price=price,
+                                side=recommendation.lower()
+                            )
+                            if success:
+                                st.success(f"Practice trade executed: {recommendation} {quantity} shares of {symbol} at ${price:.2f}")
+                            else:
+                                st.error(f"Trade failed: {message}")
+                    except Exception as e:
+                        st.error(f"Practice trade execution error: {str(e)}")
+                        logger.error(f"Practice trade error: {str(e)}")
                 else:
-                    # Real trading execution
-                    if not api_key or not api_secret:
-                        st.error("Please enter API credentials first.")
-                    else:
-                        credentials = {
-                            "api_key": api_key,
-                            "api_secret": api_secret,
-                            "base_url": base_url if platform == "Alpaca" else None
-                        }
-                        success, message = trading_service.execute_trade(
-                            platform=platform,
-                            credentials=credentials,
-                            symbol=symbol,
-                            quantity=quantity,
-                            order_type=order_type,
-                            side=recommendation,
-                            limit_price=limit_price if order_type == "Limit" else None
-                        )
-                        if success:
-                            st.success(message)
+                    try:
+                        # Real trading execution
+                        if not api_key or not api_secret:
+                            st.error("Please enter API credentials first.")
                         else:
-                            st.error(message)
+                            credentials = {
+                                "api_key": api_key,
+                                "api_secret": api_secret,
+                                "base_url": base_url if platform == "Alpaca" else None
+                            }
+                            success, message = trading_service.execute_trade(
+                                platform=platform,
+                                credentials=credentials,
+                                symbol=symbol,
+                                quantity=quantity,
+                                order_type=order_type,
+                                side=recommendation,
+                                limit_price=limit_price if order_type == "Limit" else None
+                            )
+                            if success:
+                                st.success(message)
+                            else:
+                                st.error(message)
+                    except Exception as e:
+                        st.error(f"Real trade execution error: {str(e)}")
+                        logger.error(f"Real trade error: {str(e)}")
             except Exception as e:
-                st.error(f"An error occurred: {str(e)}")
+                st.error(f"Unexpected error in trade execution: {str(e)}")
+                logger.error(f"Critical trade execution error: {str(e)}")
 
     # Additional Information
     with st.expander("Company Information"):

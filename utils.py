@@ -46,45 +46,117 @@ def calculate_metrics(hist_data):
     return metrics
 
 def calculate_comparison_metrics(stock_data):
-    """Calculate comparison metrics between multiple stocks."""
-    comparison = {}
-    
-    # Get all closing prices in a single dataframe
-    closes = pd.DataFrame()
-    volumes = pd.DataFrame()
-    returns = pd.DataFrame()
-    
-    for symbol, data in stock_data.items():
-        hist = data['history']
-        closes[symbol] = hist['Close']
-        volumes[symbol] = hist['Volume']
-        returns[symbol] = hist['Close'].pct_change()
-    
-    # Calculate correlation matrix
-    correlation_matrix = returns.corr()
-    
-    # Calculate relative performance
-    first_day_prices = closes.iloc[0]
-    normalized_prices = closes / first_day_prices
-    
-    # Calculate beta (using first stock as market proxy)
-    market_symbol = list(stock_data.keys())[0]
-    market_returns = returns[market_symbol]
-    betas = {}
-    
-    for symbol in stock_data.keys():
-        if symbol != market_symbol:
-            stock_returns = returns[symbol]
-            beta = (stock_returns.cov(market_returns) / market_returns.var())
-            betas[symbol] = round(beta, 2)
-    
-    # Compile metrics
-    comparison['correlation'] = correlation_matrix
-    comparison['normalized_prices'] = normalized_prices
-    comparison['betas'] = betas
-    comparison['volume_ratio'] = volumes / volumes.rolling(window=20).mean()
-    
-    return comparison
+    """Calculate comparison metrics between multiple stocks with input validation and error handling."""
+    try:
+        # Input validation
+        if not stock_data or not isinstance(stock_data, dict):
+            raise ValueError("Invalid input: stock_data must be a non-empty dictionary")
+        
+        if len(stock_data) < 2:
+            raise ValueError("At least two stocks are required for comparison")
+            
+        comparison = {}
+        closes = pd.DataFrame()
+        volumes = pd.DataFrame()
+        returns = pd.DataFrame()
+        
+        # Collect data with validation
+        for symbol, data in stock_data.items():
+            if 'history' not in data:
+                raise KeyError(f"Missing historical data for {symbol}")
+                
+            hist = data['history']
+            
+            # Validate required columns
+            required_columns = ['Close', 'Volume']
+            missing_columns = [col for col in required_columns if col not in hist.columns]
+            if missing_columns:
+                raise KeyError(f"Missing required columns for {symbol}: {', '.join(missing_columns)}")
+            
+            # Check for empty dataframes
+            if hist.empty:
+                raise ValueError(f"Empty historical data for {symbol}")
+            
+            # Check for sufficient data points (at least 20 days for meaningful analysis)
+            if len(hist) < 20:
+                raise ValueError(f"Insufficient data points for {symbol}. Minimum 20 days required.")
+            
+            # Handle missing values in Close prices
+            if hist['Close'].isnull().any():
+                # Forward fill, then backward fill any remaining NaNs
+                hist['Close'] = hist['Close'].ffill().bfill()
+                
+            closes[symbol] = hist['Close']
+            volumes[symbol] = hist['Volume'].fillna(0)  # Replace NaN volumes with 0
+            returns[symbol] = hist['Close'].pct_change().fillna(0)
+        
+        # Calculate correlation matrix with error checking
+        try:
+            correlation_matrix = returns.corr()
+            if correlation_matrix.isnull().any().any():
+                # If any NaN in correlation, use spearman correlation as fallback
+                correlation_matrix = returns.corr(method='spearman')
+        except Exception as e:
+            st.warning(f"Error in correlation calculation, using simplified method: {str(e)}")
+            correlation_matrix = returns.corr(method='spearman')
+        
+        # Calculate relative performance with error handling
+        try:
+            first_day_prices = closes.iloc[0]
+            if (first_day_prices == 0).any():
+                raise ValueError("Zero prices detected in first day data")
+            normalized_prices = closes / first_day_prices
+        except Exception as e:
+            st.warning(f"Error in price normalization, using alternative method: {str(e)}")
+            # Alternative normalization using percentage changes
+            normalized_prices = (1 + returns).cumprod()
+        
+        # Calculate beta with error handling
+        betas = {}
+        market_symbol = list(stock_data.keys())[0]
+        market_returns = returns[market_symbol]
+        
+        if market_returns.var() == 0:
+            st.warning("Market returns show no variance, beta calculations may be unreliable")
+        
+        for symbol in stock_data.keys():
+            if symbol != market_symbol:
+                try:
+                    stock_returns = returns[symbol]
+                    # Use rolling beta calculation for more stability
+                    rolling_cov = stock_returns.rolling(window=30).cov(market_returns)
+                    rolling_var = market_returns.rolling(window=30).var()
+                    beta = rolling_cov.mean() / rolling_var.mean()
+                    betas[symbol] = round(float(beta), 2)
+                except Exception as e:
+                    st.warning(f"Error calculating beta for {symbol}: {str(e)}")
+                    betas[symbol] = None
+        
+        # Calculate volume ratio with error handling
+        try:
+            volume_ratio = volumes / volumes.rolling(window=20).mean()
+            volume_ratio = volume_ratio.fillna(1)  # Fill NaN with 1 (neutral ratio)
+        except Exception as e:
+            st.warning(f"Error calculating volume ratios: {str(e)}")
+            volume_ratio = pd.DataFrame(1, index=volumes.index, columns=volumes.columns)
+        
+        # Compile metrics
+        comparison['correlation'] = correlation_matrix
+        comparison['normalized_prices'] = normalized_prices
+        comparison['betas'] = betas
+        comparison['volume_ratio'] = volume_ratio
+        
+        return comparison
+        
+    except Exception as e:
+        st.error(f"Error in comparison metrics calculation: {str(e)}")
+        # Return fallback empty comparison structure
+        return {
+            'correlation': pd.DataFrame(),
+            'normalized_prices': pd.DataFrame(),
+            'betas': {},
+            'volume_ratio': pd.DataFrame()
+        }
 
 def get_recommendation(hist_data):
     """Generate trading recommendation based on technical analysis."""
