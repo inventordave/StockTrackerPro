@@ -24,74 +24,119 @@ st.title('📈 Stock Analysis Dashboard')
 # Input section
 col1, col2 = st.columns([2, 1])
 with col1:
-    symbol = st.text_input('Enter Stock Symbol (e.g., AAPL):', value='AAPL')
+    symbols_input = st.text_input('Enter Stock Symbols (comma-separated, e.g., AAPL,MSFT):', value='AAPL')
+    symbols = [sym.strip().upper() for sym in symbols_input.split(',') if sym.strip()]
 with col2:
     period = st.selectbox('Select Time Period:', 
                          ['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y'])
 
+# Validate input
+if not symbols:
+    st.error('Please enter at least one stock symbol.')
+    st.stop()
+if len(symbols) > 5:
+    st.warning('Maximum 5 stocks can be compared at once. Only first 5 will be shown.')
+    symbols = symbols[:5]
+
 # Fetch data
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_stock_data(symbol, period):
-    try:
-        stock = yf.Ticker(symbol)
-        hist = stock.history(period=period, interval="1d")
-        info = stock.info
-        return hist, info, True
-    except:
-        return None, None, False
+def get_stock_data(symbols, period):
+    data = {}
+    for symbol in symbols:
+        try:
+            stock = yf.Ticker(symbol)
+            hist = stock.history(period=period, interval="1d")
+            info = stock.info
+            data[symbol] = {'history': hist, 'info': info}
+        except Exception as e:
+            st.error(f'Error fetching data for {symbol}: {str(e)}')
+            return None
+    return data if data else None
 
-hist_data, stock_info, success = get_stock_data(symbol, period)
+stock_data = get_stock_data(symbols, period)
 
-if not success:
-    st.error('Error fetching data. Please check the stock symbol and try again.')
+if stock_data is None:
+    st.error('Error fetching data. Please check the stock symbols and try again.')
     st.stop()
 
 # Current price and basic info
-if stock_info and hist_data is not None:
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        current_price = hist_data['Close'].iloc[-1]
-        # Calculate price change only if we have at least 2 data points
-        if len(hist_data) >= 2:
-            prev_price = hist_data['Close'].iloc[-2]
-            price_change = ((current_price - prev_price)/prev_price*100)
-            change_str = f"{price_change:.2f}%"
-        else:
-            change_str = "N/A"
+if stock_data:
+    # Create metrics for each stock
+    for symbol in symbols:
+        st.subheader(f'{symbol} Metrics')
+        hist_data = stock_data[symbol]['history']
+        stock_info = stock_data[symbol]['info']
         
-        st.metric("Current Price", 
-                 f"${current_price:.2f}", 
-                 change_str)
-    
-    with col2:
-        st.metric("Market Cap", 
-                 f"${stock_info.get('marketCap', 0)/1e9:.2f}B")
-    
-    with col3:
-        st.metric("Volume", 
-                 f"{stock_info.get('volume', 0):,}")
-    
-    with col4:
-        st.metric("52 Week High", 
-                 f"${stock_info.get('fiftyTwoWeekHigh', 0):.2f}")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            current_price = hist_data['Close'].iloc[-1]
+            if len(hist_data) >= 2:
+                prev_price = hist_data['Close'].iloc[-2]
+                price_change = ((current_price - prev_price)/prev_price*100)
+                change_str = f"{price_change:.2f}%"
+            else:
+                change_str = "N/A"
+            
+            st.metric("Current Price", 
+                     f"${current_price:.2f}", 
+                     change_str)
+        
+        with col2:
+            st.metric("Market Cap", 
+                     f"${stock_info.get('marketCap', 0)/1e9:.2f}B")
+        
+        with col3:
+            st.metric("Volume", 
+                     f"{stock_info.get('volume', 0):,}")
+        
+        with col4:
+            st.metric("52 Week High", 
+                     f"${stock_info.get('fiftyTwoWeekHigh', 0):.2f}")
 
-    # Price Chart
-    st.subheader('Price History')
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=hist_data.index,
-                                open=hist_data['Open'],
-                                high=hist_data['High'],
-                                low=hist_data['Low'],
-                                close=hist_data['Close'],
-                                name='OHLC'))
-    fig.update_layout(
-        title=f'{symbol} Stock Price',
-        yaxis_title='Stock Price (USD)',
+    # Comparison Charts
+    st.subheader('Price Comparison')
+    
+    # Line chart for price comparison
+    fig_comparison = go.Figure()
+    for symbol in symbols:
+        hist_data = stock_data[symbol]['history']
+        normalized_price = (hist_data['Close'] / hist_data['Close'].iloc[0]) * 100
+        fig_comparison.add_trace(go.Scatter(
+            x=hist_data.index,
+            y=normalized_price,
+            name=symbol,
+            mode='lines'
+        ))
+    
+    fig_comparison.update_layout(
+        title='Normalized Price Comparison (Base 100)',
+        yaxis_title='Normalized Price',
         xaxis_title='Date',
         template='plotly_white'
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig_comparison, use_container_width=True)
+    
+    # Individual stock charts
+    for symbol in symbols:
+        hist_data = stock_data[symbol]['history']
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(
+            x=hist_data.index,
+            open=hist_data['Open'],
+            high=hist_data['High'],
+            low=hist_data['Low'],
+            close=hist_data['Close'],
+            name='OHLC'
+        ))
+        fig.update_layout(
+            title=f'{symbol} Stock Price',
+            yaxis_title='Stock Price (USD)',
+            xaxis_title='Date',
+            template='plotly_white',
+            showlegend=False
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     # Metrics and Analysis
     metrics_df = calculate_metrics(hist_data)
