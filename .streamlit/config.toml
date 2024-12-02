@@ -1,22 +1,20 @@
 [server]
 headless = true
 enableCORS = false
-enableXsrfProtection = false
-address = "0.0.0.0"
 port = 5000
-baseUrlPath = ""
+address = "0.0.0.0"
+enableXsrfProtection = false
 maxMessageSize = 200
 maxUploadSize = 200
 enableWebsocketCompression = true
+baseUrlPath = ""
 
 [theme]
 primaryColor = "#FF4B4B"
 backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F0F2F6"
 textColor = "#262730"
+font = "sans serif"
 
 [browser]
 gatherUsageStats = false
-
-[runner]
-fastReruns = true

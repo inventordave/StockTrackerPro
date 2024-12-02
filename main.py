@@ -1,17 +1,12 @@
 import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
+import plotly.express as px
 import pandas as pd
 import numpy as np
-import os
-import os
-import streamlit as st
-import yfinance as yf
-import pandas as pd
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import numpy as np
 import logging
+import os
 import time
 from functools import wraps
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -63,8 +58,20 @@ logger = logging.getLogger(__name__)
 st.set_page_config(
     page_title="Stock Analysis Dashboard",
     page_icon="📈",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
+
+# Update port configuration
+try:
+    if os.environ.get('PORT'):
+        port = int(os.environ.get('PORT'))
+    else:
+        port = 3002  # Match with config.toml
+    os.environ['STREAMLIT_SERVER_PORT'] = str(port)
+except Exception as e:
+    logger.error(f"Server startup error: {str(e)}")
+    st.error(f"Server configuration error: {str(e)}")
 
 # Initialize practice portfolio in session state if not exists
 if 'practice_portfolio' not in st.session_state:
@@ -134,24 +141,48 @@ if len(symbols) > 5:
     symbols = symbols[:5]
 
 # Fetch data
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=300)
 @with_retry(max_attempts=3, initial_wait=1)
 def get_stock_data(symbols, period):
-    """Fetch stock data with improved error handling and WebSocket management"""
     try:
-        # Configure WebSocket connection and retry parameters
-        st.session_state.ws_retry_count = getattr(st.session_state, 'ws_retry_count', 0)
-        max_ws_retries = 3
-        
-        # Initialize WebSocket connection if needed
-        if getattr(st.session_state, 'ws_connection', None) is None:
+        data = {}
+        errors = []
+        for symbol in symbols:
             try:
-                st.session_state.ws_connection = True  # Placeholder for actual WebSocket connection
-                logger.info("WebSocket connection initialized successfully")
-            except Exception as ws_e:
-                st.error(f"WebSocket connection error: {str(ws_e)}")
-                logger.error(f"WebSocket error: {str(ws_e)}")
-                raise
+                with st.spinner(f'Fetching data for {symbol}...'):
+                    stock = yf.Ticker(symbol)
+                    hist = stock.history(period=period, interval="1d", timeout=20)
+                    if hist.empty:
+                        raise ValueError(f"No data available for {symbol}")
+                    data[symbol] = {'history': hist}
+            except Exception as e:
+                errors.append(f"Error fetching {symbol}: {str(e)}")
+                continue
+        if errors:
+            st.warning("\n".join(errors))
+        return data if data else None
+    except Exception as e:
+        st.error(f"Critical error in data fetching: {str(e)}")
+        logger.error(f"Data fetch error: {str(e)}")
+        return None
+
+# Update WebSocket connection handling
+try:
+    if 'ws_connection' not in st.session_state:
+        try:
+            st.session_state.ws_connection = True
+            st.session_state.ws_retry_count = 0
+            logger.info("WebSocket connection initialized successfully")
+        except Exception as ws_e:
+            logger.error(f"WebSocket error: {str(ws_e)}")
+            st.error(f"WebSocket connection error: {str(ws_e)}")
+            if st.session_state.get('ws_retry_count', 0) < 3:
+                st.session_state.ws_retry_count = st.session_state.get('ws_retry_count', 0) + 1
+                time.sleep(2 ** st.session_state.ws_retry_count)
+                st.experimental_rerun()
+except Exception as e:
+    logger.error(f"Critical WebSocket error: {str(e)}")
+    st.error("Unable to establish connection. Please refresh the page.")
     data = {}
     errors = []
     connection_manager.retry_count = 0
@@ -274,7 +305,109 @@ if stock_data:
 
     # Stock Comparison Analysis
     st.header('Stock Comparison Analysis')
+
+    # Initialize session state for comparison symbols
+    if 'comparison_symbols' not in st.session_state:
+        st.session_state.comparison_symbols = ['AAPL', 'MSFT', 'GOOGL']
+
+    def fetch_stock_data(symbols, period='1y'):
+        """Fetch historical data for multiple symbols"""
+        try:
+            data = {}
+            for symbol in symbols:
+                ticker = yf.Ticker(symbol)
+                data[symbol] = ticker.history(period=period)
+            return data
+        except Exception as e:
+            logger.error(f"Error fetching stock data: {str(e)}")
+            return None
+
+    def calculate_metrics(data):
+        """Calculate key metrics for comparison"""
+        metrics = {}
+        for symbol, df in data.items():
+            if not df.empty:
+                metrics[symbol] = {
+                    'Current Price': df['Close'].iloc[-1],
+                    'Daily Return': df['Close'].pct_change().mean() * 100,
+                    'Volatility': df['Close'].pct_change().std() * 100,
+                    'Volume': df['Volume'].mean()
+                }
+        return metrics
+
+    # Sidebar for stock selection
+    with st.sidebar:
+        st.subheader("Compare Stocks")
+        # Allow users to input multiple stock symbols
+        symbols_input = st.text_input(
+            "Enter stock symbols (comma-separated)",
+            value=",".join(st.session_state.comparison_symbols)
+        )
+        st.session_state.comparison_symbols = [s.strip() for s in symbols_input.split(",")]
+        
+        period = st.selectbox(
+            "Select Time Period",
+            ['1mo', '3mo', '6mo', '1y', '2y', '5y'],
+            index=3
+        )
+
+    # Fetch data for all symbols
+    data = fetch_stock_data(st.session_state.comparison_symbols, period)
     
+    if data:
+        # Calculate metrics for comparison
+        metrics = calculate_metrics(data)
+        
+        # Display comparison metrics
+        st.subheader("Stock Comparison Metrics")
+        metrics_df = pd.DataFrame(metrics).T
+        st.dataframe(metrics_df)
+        
+        # Normalize prices for comparison
+        st.subheader("Price Performance Comparison")
+        fig = go.Figure()
+        for symbol, df in data.items():
+            normalized_prices = df['Close'] / df['Close'].iloc[0] * 100
+            fig.add_trace(go.Scatter(
+                x=df.index,
+                y=normalized_prices,
+                name=symbol,
+                mode='lines'
+            ))
+        
+        fig.update_layout(
+            title="Normalized Price Performance (%)",
+            xaxis_title="Date",
+            yaxis_title="Normalized Price (%)",
+            template="plotly_white",
+            height=600
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Volume Comparison
+        st.subheader("Trading Volume Comparison")
+        volume_fig = go.Figure()
+        for symbol, df in data.items():
+            volume_fig.add_trace(go.Bar(
+                x=df.index,
+                y=df['Volume'],
+                name=symbol,
+                opacity=0.7
+            ))
+        
+        volume_fig.update_layout(
+            title="Daily Trading Volume",
+            xaxis_title="Date",
+            yaxis_title="Volume",
+            template="plotly_white",
+            height=400,
+            barmode='group'
+        )
+        st.plotly_chart(volume_fig, use_container_width=True)
+        
+    else:
+        st.error("Failed to fetch stock data. Please check the symbols and try again.")
+
     try:
         # Calculate comparison metrics with error handling
         comparison_data = calculate_comparison_metrics(stock_data)
@@ -302,6 +435,10 @@ if stock_data:
         else:
             st.warning("Unable to generate correlation heatmap due to insufficient data.")
     
+    except Exception as e:
+        st.error(f"Error generating correlation chart: {str(e)}")
+
+
     try:
         # Normalized Price Comparison
         st.subheader('Relative Performance')
@@ -358,7 +495,7 @@ if stock_data:
                 st.warning("Unable to generate volume analysis chart due to invalid data.")
         else:
             st.warning("No valid data available for volume analysis.")
-            
+        
     except Exception as e:
         st.error(f"Error generating comparison charts: {str(e)}")
     
