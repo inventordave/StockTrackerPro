@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
-from utils import calculate_metrics, get_recommendation
+from utils import calculate_metrics, get_recommendation, calculate_comparison_metrics
 from trading import trading_service
 from practice_mode import PracticePortfolio
 
