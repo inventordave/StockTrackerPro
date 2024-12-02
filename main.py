@@ -6,6 +6,11 @@ from datetime import datetime, timedelta
 import numpy as np
 from utils import calculate_metrics, get_recommendation
 from trading import trading_service
+from practice_mode import PracticePortfolio
+
+# Initialize practice portfolio in session state if not exists
+if 'practice_portfolio' not in st.session_state:
+    st.session_state.practice_portfolio = PracticePortfolio()
 
 # Page config
 st.set_page_config(
@@ -174,12 +179,72 @@ if stock_data:
         # Trading Interface
         st.subheader("Trading Interface")
         
-        # Trading platform selection
-        platform = st.selectbox(
-            "Select Trading Platform",
-            ["Alpaca", "Interactive Brokers"],
-            key="trading_platform"
-        )
+        # Practice Mode Toggle
+        practice_mode = st.toggle("Practice Mode", help="Enable practice trading with virtual money")
+        
+        if practice_mode:
+            st.info("🎓 Practice Mode Enabled - Trading with virtual portfolio")
+            
+            # Show practice portfolio metrics
+            portfolio = st.session_state.practice_portfolio
+            current_prices = {symbol: stock_data[symbol]['history']['Close'].iloc[-1] 
+                            for symbol in stock_data.keys()}
+            
+            metrics = portfolio.get_performance_metrics(current_prices)
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Portfolio Value", f"${metrics['total_value']:,.2f}")
+            with col2:
+                st.metric("Cash Balance", f"${metrics['cash_balance']:,.2f}")
+            with col3:
+                st.metric("Total Return", f"{metrics['total_return']:.2f}%")
+            with col4:
+                st.metric("Win Ratio", f"{metrics['win_ratio']*100:.1f}%")
+            
+            # Portfolio Performance Chart
+            if metrics['total_trades'] > 0:
+                st.subheader("Portfolio Performance")
+                trade_df = pd.DataFrame([
+                    {
+                        'Date': trade.date,
+                        'Symbol': trade.symbol,
+                        'Side': trade.side,
+                        'Quantity': trade.quantity,
+                        'Price': trade.price,
+                        'PnL': trade.pnl if trade.pnl is not None else 0
+                    }
+                    for trade in portfolio.trade_history
+                ])
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=trade_df['Date'],
+                    y=trade_df['PnL'].cumsum(),
+                    mode='lines',
+                    name='Cumulative P&L'
+                ))
+                fig.update_layout(
+                    title='Portfolio P&L Over Time',
+                    xaxis_title='Date',
+                    yaxis_title='Cumulative P&L ($)',
+                    template='plotly_white'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Show best and worst trades
+                if metrics['best_trade']:
+                    st.write(f"Best Trade: {metrics['best_trade'].symbol} - ${metrics['best_trade'].pnl:,.2f}")
+                if metrics['worst_trade']:
+                    st.write(f"Worst Trade: {metrics['worst_trade'].symbol} - ${metrics['worst_trade'].pnl:,.2f}")
+        
+        if not practice_mode:
+            # Trading platform selection
+            platform = st.selectbox(
+                "Select Trading Platform",
+                ["Alpaca", "Interactive Brokers"],
+                key="trading_platform"
+            )
         
         # API Credentials
         with st.expander("Trading Platform Credentials"):
@@ -218,29 +283,44 @@ if stock_data:
         
         # Trade execution button
         if st.button("Execute Trade"):
-            if not api_key or not api_secret:
-                st.error("Please enter API credentials first.")
+            if practice_mode:
+                # Execute practice trade
+                price = current_price if order_type == "Market" else limit_price
+                success = st.session_state.practice_portfolio.execute_trade(
+                    symbol=symbol,
+                    quantity=quantity,
+                    price=price,
+                    side=recommendation.lower()
+                )
+                if success:
+                    st.success(f"Practice trade executed: {recommendation} {quantity} shares of {symbol} at ${price:.2f}")
+                else:
+                    st.error("Insufficient funds or invalid trade parameters")
             else:
-                confirm = st.button(f"Confirm {recommendation} {quantity} shares of {symbol}")
-                if confirm:
-                    credentials = {
-                        "api_key": api_key,
-                        "api_secret": api_secret,
-                        "base_url": base_url if platform == "Alpaca" else None
-                    }
-                    success, message = trading_service.execute_trade(
-                        platform=platform,
-                        credentials=credentials,
-                        symbol=symbol,
-                        quantity=quantity,
-                        order_type=order_type,
-                        side=recommendation,
-                        limit_price=limit_price if order_type == "Limit" else None
-                    )
-                    if success:
-                        st.success(message)
-                    else:
-                        st.error(message)
+                # Real trading execution
+                if not api_key or not api_secret:
+                    st.error("Please enter API credentials first.")
+                else:
+                    confirm = st.button(f"Confirm {recommendation} {quantity} shares of {symbol}")
+                    if confirm:
+                        credentials = {
+                            "api_key": api_key,
+                            "api_secret": api_secret,
+                            "base_url": base_url if platform == "Alpaca" else None
+                        }
+                        success, message = trading_service.execute_trade(
+                            platform=platform,
+                            credentials=credentials,
+                            symbol=symbol,
+                            quantity=quantity,
+                            order_type=order_type,
+                            side=recommendation,
+                            limit_price=limit_price if order_type == "Limit" else None
+                        )
+                        if success:
+                            st.success(message)
+                        else:
+                            st.error(message)
 
     # Additional Information
     with st.expander("Company Information"):
