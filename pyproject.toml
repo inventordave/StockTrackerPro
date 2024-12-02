@@ -1,0 +1,12 @@
+[project]
+name = "repl-nix-stocktrackerpro"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.55.3",
+    "plotly>=5.24.1",
+    "streamlit>=1.40.2",
+    "trafilatura>=1.12.2",
+    "yfinance>=0.2.50",
+]

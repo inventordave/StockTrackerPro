@@ -1,0 +1,62 @@
+/* Main styles */
+.stApp {
+    font-family: 'Inter', sans-serif;
+}
+
+/* Metrics styling */
+.metric-container {
+    background-color: #ffffff;
+    border-radius: 8px;
+    padding: 1rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Table styling */
+.dataframe {
+    font-size: 0.9rem !important;
+}
+
+/* Recommendation styles */
+.recommendation {
+    padding: 1rem;
+    border-radius: 8px;
+    text-align: center;
+    font-weight: bold;
+    font-size: 1.2rem;
+    margin: 1rem 0;
+}
+
+.recommendation.buy {
+    background-color: #a8e6cf;
+    color: #1b4332;
+}
+
+.recommendation.sell {
+    background-color: #ffb3b3;
+    color: #7f1d1d;
+}
+
+.recommendation.hold {
+    background-color: #ffd8a8;
+    color: #7c2d12;
+}
+
+/* Download button styling */
+.stDownloadButton {
+    width: 100%;
+    margin-top: 1rem;
+}
+
+/* Chart container */
+.plot-container {
+    background-color: white;
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 1rem 0;
+}
+
+/* Expandable section styling */
+.streamlit-expanderHeader {
+    font-size: 1rem;
+    font-weight: 600;
+}
