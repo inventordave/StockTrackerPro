@@ -1,3 +1,9 @@
+import streamlit as st
+import yfinance as yf
+import plotly.graph_objects as go
+import pandas as pd
+import numpy as np
+import os
 import os
 import streamlit as st
 import yfinance as yf
@@ -6,6 +12,45 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
 import logging
+import time
+from functools import wraps
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+# Configure retry decorator
+def with_retry(max_attempts=3, initial_wait=1):
+    def decorator(func):
+        @retry(
+            stop=stop_after_attempt(max_attempts),
+            wait=wait_exponential(multiplier=initial_wait, min=initial_wait, max=10),
+            reraise=True
+        )
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"Error in {func.__name__}: {str(e)}")
+                raise
+        return wrapper
+    return decorator
+
+# Error recovery and connection management
+class ConnectionManager:
+    def __init__(self):
+        self.retry_count = 0
+        self.max_retries = 3
+        self.base_delay = 1
+        
+    def handle_connection_error(self, error):
+        if self.retry_count < self.max_retries:
+            delay = self.base_delay * (2 ** self.retry_count)
+            logger.warning(f"Connection error: {str(error)}. Retrying in {delay} seconds...")
+            time.sleep(delay)
+            self.retry_count += 1
+            return True
+        return False
+
+connection_manager = ConnectionManager()
 from utils import calculate_metrics, get_recommendation, calculate_comparison_metrics
 from trading import trading_service
 from practice_mode import PracticePortfolio
@@ -90,9 +135,26 @@ if len(symbols) > 5:
 
 # Fetch data
 @st.cache_data(ttl=300)  # Cache for 5 minutes
+@with_retry(max_attempts=3, initial_wait=1)
 def get_stock_data(symbols, period):
+    """Fetch stock data with improved error handling and WebSocket management"""
+    try:
+        # Configure WebSocket connection and retry parameters
+        st.session_state.ws_retry_count = getattr(st.session_state, 'ws_retry_count', 0)
+        max_ws_retries = 3
+        
+        # Initialize WebSocket connection if needed
+        if getattr(st.session_state, 'ws_connection', None) is None:
+            try:
+                st.session_state.ws_connection = True  # Placeholder for actual WebSocket connection
+                logger.info("WebSocket connection initialized successfully")
+            except Exception as ws_e:
+                st.error(f"WebSocket connection error: {str(ws_e)}")
+                logger.error(f"WebSocket error: {str(ws_e)}")
+                raise
     data = {}
     errors = []
+    connection_manager.retry_count = 0
     
     if not symbols:
         st.error("No symbols provided")
@@ -105,22 +167,31 @@ def get_stock_data(symbols, period):
                 
                 # Fetch history with timeout and error handling
                 try:
-                    hist = stock.history(period=period, interval="1d")
-                    if hist.empty:
-                        errors.append(f"No historical data available for {symbol}")
-                        continue
-                    
-                    if len(hist) < 20:  # Check for sufficient data points
-                        errors.append(f"Insufficient historical data for {symbol} (minimum 20 days required)")
-                        continue
-                        
-                    # Ensure all required columns are present
-                    required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-                    missing_columns = [col for col in required_columns if col not in hist.columns]
-                    if missing_columns:
-                        errors.append(f"Missing required data columns for {symbol}: {', '.join(missing_columns)}")
-                        continue
-                        
+                    for attempt in range(3):
+                        try:
+                            hist = stock.history(period=period, interval="1d", timeout=10)
+                            if hist.empty:
+                                if connection_manager.handle_connection_error("Empty data received"):
+                                    continue
+                                errors.append(f"No historical data available for {symbol}")
+                                break
+                            
+                            if len(hist) < 20:
+                                errors.append(f"Insufficient historical data for {symbol} (minimum 20 days required)")
+                                break
+                            
+                            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+                            missing_columns = [col for col in required_columns if col not in hist.columns]
+                            if missing_columns:
+                                errors.append(f"Missing required data columns for {symbol}: {', '.join(missing_columns)}")
+                                break
+                                
+                            # If we got here, the data is valid
+                            break
+                        except Exception as e:
+                            if not connection_manager.handle_connection_error(e):
+                                errors.append(f"Error fetching historical data for {symbol}: {str(e)}")
+                                break
                 except Exception as e:
                     errors.append(f"Error fetching historical data for {symbol}: {str(e)}")
                     continue

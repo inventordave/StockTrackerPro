@@ -1422,6 +1422,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "streamlit" },
+    { name = "tenacity" },
     { name = "trafilatura" },
     { name = "yfinance" },
 ]
@@ -1437,6 +1438,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "requests", specifier = ">=2.32.3" },
     { name = "streamlit", specifier = ">=1.24.0" },
+    { name = "tenacity", specifier = ">=9.0.0" },
     { name = "trafilatura", specifier = ">=1.12.2" },
     { name = "yfinance", specifier = ">=0.2.28" },
 ]
