@@ -292,7 +292,7 @@ if stock_data:
                     elif quantity <= 0:
                         st.error("Invalid quantity. Please enter a positive number.")
                     else:
-                        success = st.session_state.practice_portfolio.execute_trade(
+                        success, message = st.session_state.practice_portfolio.execute_trade(
                             symbol=symbol,
                             quantity=quantity,
                             price=price,
@@ -301,7 +301,7 @@ if stock_data:
                         if success:
                             st.success(f"Practice trade executed: {recommendation} {quantity} shares of {symbol} at ${price:.2f}")
                         else:
-                            st.error("Trade failed. Please check your virtual balance and trade parameters.")
+                            st.error(f"Trade failed: {message}")
                 else:
                     # Real trading execution
                     if not api_key or not api_secret:
